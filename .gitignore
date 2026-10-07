@@ -1,0 +1,10 @@
+# No first-party Python package lives here, so this only needs to cover caches
+# and local cruft.
+__pycache__/
+*.py[codz]
+
+.venv/
+.env
+
+.DS_Store
+Thumbs.db

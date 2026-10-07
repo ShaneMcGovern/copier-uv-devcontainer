@@ -1,0 +1,12 @@
+{
+  "name": "uv-devcontainer-repo",
+  "dockerComposeFile": "compose.yaml",
+  "service": "app",
+  "workspaceFolder": "/workspace",
+  "customizations": {
+    "vscode": {
+      "extensions": ["redhat.vscode-yaml"]
+    }
+  },
+  "remoteUser": "developer"
+}
