@@ -1,0 +1,340 @@
+---
+name: Template
+
+on:
+  # Scoped to what can change generated output, which includes anything
+  # `uv sync` reads at the root, since that decides which copier renders the
+  # template. push only, no pull_request, because a branch push with an open PR
+  # fires both, and this is three matrix legs plus a Windows runner billed at 2x.
+  push:
+    paths:
+      - "template/**"
+      - "copier.yml"
+      - "python-versions.yml"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/template.yml"
+
+permissions:
+  contents: read
+
+# Safe to cancel because this workflow writes nothing. It generates into /tmp
+# and commits, tags and publishes nothing.
+concurrency:
+  group: template-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # A job rather than a matrix step, which would repeat the same requests once
+  # per leg. The matrix builds only the newest and oldest offered versions, so
+  # nothing else looks at the ones in between.
+  versions:
+    name: Offered Python versions exist
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      # Checks existence, not staleness; a staleness check would redden every
+      # unrelated PR the moment CPython ships a patch. --no-project because
+      # this needs a YAML parser, not the template toolchain.
+      - name: Every offered Python has a published image
+        run: |
+          uv run --no-project --with pyyaml python - <<'PY'
+          import sys, time, urllib.error, urllib.request, yaml
+
+          # The same file copier.yml !includes, read rather than restated, so
+          # this check and copier cannot disagree.
+          versions = yaml.safe_load(open("python-versions.yml"))
+
+          # Only a 404 says anything about the tag. Every other failure is a
+          # statement about Docker Hub, which rate-limits anonymous requests.
+          def check(version):
+              url = f"https://hub.docker.com/v2/repositories/library/python/tags/{version}-slim-bookworm"
+              for attempt in range(3):
+                  try:
+                      urllib.request.urlopen(url, timeout=20)
+                      return None
+                  except urllib.error.HTTPError as exc:
+                      if exc.code == 404:
+                          return f"python-versions.yml offers {version}, but python:{version}-slim-bookworm does not exist"
+                      last = f"Docker Hub returned HTTP {exc.code}"
+                  except Exception as exc:
+                      last = str(exc)
+                  if attempt < 2:
+                      time.sleep(2 ** attempt * 5)
+              # A check that could not reach the registry has verified nothing.
+              return f"could not check python:{version}-slim-bookworm after 3 attempts: {last}"
+
+          for v in versions:
+              problem = check(v)
+              if problem:
+                  # Use print, not sys.exit's argument. GitHub reads workflow
+                  # commands from stdout, and sys.exit writes to stderr.
+                  print(f"::error::{problem}")
+                  sys.exit(1)
+          print(f"All {len(versions)} offered versions have published images.")
+          PY
+
+  # A job, not a fourth matrix leg, which would miss the thing it exists to
+  # catch. `shell` is a step-level setting, and a bash step on a Windows runner
+  # leaks Git's cp.exe onto the PATH cmd.exe inherits, masking the very failure
+  # being guarded against. Generation only; the ubuntu legs already prove the
+  # project lints, types and tests.
+  windows:
+    name: Generate on Windows
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install template tooling
+        run: uv sync --frozen --all-groups
+
+      - name: Generate a project
+        run: |
+          git config --global --add safe.directory "$env:GITHUB_WORKSPACE"
+          uv run copier copy --defaults --trust --vcs-ref=HEAD "$env:GITHUB_WORKSPACE" "$env:RUNNER_TEMP\generated"
+
+      # Copier rolls the destination back when a task fails, so exiting zero is
+      # most of the assertion; these checks name what the tasks own. uv.lock
+      # must NOT exist: the template locks in entrypoint.sh rather than during
+      # generation, so generating never depends on the host having the
+      # interpreter .python-version pins.
+      - name: The generation tasks did their work
+        run: |
+          $dst = "$env:RUNNER_TEMP\generated"
+          foreach ($f in @(".git", ".devcontainer/.env")) {
+            if (-not (Test-Path (Join-Path $dst $f))) {
+              Write-Output "::error::copier exited cleanly but $f is missing"
+              exit 1
+            }
+          }
+          if (Test-Path (Join-Path $dst "uv.lock")) {
+            Write-Output "::error::uv.lock was generated; the template locks in entrypoint.sh, not during generation"
+            exit 1
+          }
+          Write-Output "git repo and .devcontainer/.env present, and no uv.lock, as intended."
+
+  generate:
+    name: Generate and test (${{ matrix.label }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # `releases` restates `data` so the steps below test a boolean. If
+          # they grepped the argument string, a rewording would leave the grep
+          # matching nothing, and an `if` that is never true would skip
+          # green.
+          - label: defaults
+            data: ""
+            releases: true
+          # Apache-2.0 rides along here and BSD-3-Clause on the leg below,
+          # because LICENSE.jinja's two non-MIT branches have to render
+          # somewhere and a leg of their own would be a whole cycle per file.
+          - label: no-release
+            data: "--data use_semantic_release=false --data license=Apache-2.0"
+            releases: false
+          # Bump this with python-versions.yml; it is the oldest version
+          # offered, and the only leg where the requires-python derivation is
+          # not a no-op. An unlisted value is a hard ValueError, so forgetting
+          # reddens the leg instead of passing on a version nobody is offered.
+          - label: oldest-python
+            data: "--data python_version=3.10.21 --data license=BSD-3-Clause"
+            releases: true
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+        with:
+          # copier resolves a git template by tag, so it needs the history.
+          fetch-depth: 0
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install template tooling
+        run: uv sync --frozen --all-groups
+
+      # --vcs-ref=HEAD is mandatory. Without it copier checks out the latest
+      # tag, and this job reports green for code it never generated.
+      - name: Generate a project
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          # Use "$PWD", not ".". A "." source makes git report the repo as
+          # <path>/./.git, which does not match the exemption above, and copier
+          # dies with "dubious ownership".
+          uv run copier copy --defaults --trust --vcs-ref=HEAD \
+            ${{ matrix.data }} "$PWD" /tmp/generated
+
+      - name: Fail if any Jinja survived rendering
+        run: |
+          cd /tmp/generated
+          # This uses [$]{{ instead of the obvious escape. A literal
+          # dollar-brace-brace anywhere in this file, single quotes included,
+          # parses as an Actions expression and rejects the whole workflow. The
+          # pattern must not require a trailing space, or whitespace control
+          # like {%- if x %} walks past it.
+          if grep -rnIE '\{\{|\{%' . --exclude-dir=.git | grep -v '[$]{{'; then
+            echo "::error::Unrendered Jinja found in generated output"
+            exit 1
+          fi
+          echo "No unrendered Jinja."
+
+      # The check above proves the docs rendered, not that they are true. With
+      # releases off there is no release.yml and no CHANGELOG.md, so prose
+      # naming either is a dangling reference that passes every hook.
+      - name: Fail on release prose when releases are off
+        if: ${{ !matrix.releases }}
+        run: |
+          cd /tmp/generated
+          if grep -rn 'python-semantic-release\|release\.yml\|PSR' . \
+            --include='*.md' --exclude-dir=.git; then
+            echo "::error::Releases are off, but the generated docs describe them"
+            exit 1
+          fi
+          echo "No release prose."
+
+      # The mirror of the step above. Without it, an _exclude expression that
+      # started excluding unconditionally would take both files from every
+      # project and leave the matrix green.
+      - name: Releases on means release.yml and CHANGELOG.md exist
+        if: ${{ matrix.releases }}
+        run: |
+          cd /tmp/generated
+          for f in .github/workflows/release.yml CHANGELOG.md; do
+            test -f "$f" || {
+              echo "::error::releases are on, but $f was not generated"
+              exit 1
+            }
+          done
+          echo "release.yml and CHANGELOG.md are present."
+
+      # A revert of either answer renders valid Markdown that passes the
+      # generated project's hooks and tests, going green with the wrong words.
+      - name: The README leads with the name and description, not the slug
+        run: |
+          cd /tmp/generated
+          head -n1 README.md | grep -qxF '# My Project' || {
+            echo "::error::README H1 is not project_name"; exit 1; }
+          grep -qxF 'A Python project.' README.md || {
+            echo "::error::README does not carry project_description"; exit 1; }
+          echo "README uses project_name and project_description."
+
+      # Read back rather than restated per leg, so this stays honest when a
+      # matrix entry changes.
+      - name: LICENSE carries the license that was asked for
+        run: |
+          cd /tmp/generated
+          # tr strips the quotes to_nice_yaml adds around values it considers
+          # ambiguous; assuming there are none falls through to the catch-all.
+          want=$(grep '^license:' .copier-answers.yml | cut -d' ' -f2 | tr -d "\"'")
+          test -n "$want" || {
+            echo "::error::.copier-answers.yml has no license: line"; exit 1; }
+          case "$want" in
+            MIT) head -n1 LICENSE | grep -qxF 'MIT License' ;;
+            Apache-2.0) head -n3 LICENSE | grep -qF 'Apache License' ;;
+            BSD-3-Clause) head -n1 LICENSE | grep -qxF 'BSD 3-Clause License' ;;
+            *) echo "::error::no LICENSE assertion for '$want'"; exit 1 ;;
+          esac || {
+            echo "::error::LICENSE does not carry the $want text"
+            head -n3 LICENSE
+            exit 1
+          }
+          echo "LICENSE carries the $want text."
+
+      # A broken derivation renders a floor nobody asked for, and `uv lock`
+      # objects only when that floor is also unsatisfiable.
+      - name: requires-python derives from python_version
+        run: |
+          cd /tmp/generated
+          ver=$(grep '^python_version:' .copier-answers.yml | cut -d' ' -f2 | tr -d "\"'")
+          test -n "$ver" || {
+            echo "::error::.copier-answers.yml has no python_version: line"; exit 1; }
+          want=">=$(echo "$ver" | cut -d. -f1,2)"
+          got=$(grep '^requires-python' pyproject.toml | cut -d'"' -f2)
+          test "$got" = "$want" || {
+            echo "::error::requires-python is '$got', expected '$want' for python_version $ver"
+            exit 1
+          }
+          echo "requires-python is $got, derived from python_version $ver."
+
+      # Every answer the legs above pass is well behaved, which is why this
+      # exists. project_description and author_name are free text landing in
+      # TOML basic strings and in .env's double-quoted values, where an
+      # unescaped " or \ would break a task.
+      - name: Awkward answers still generate
+        if: matrix.label == 'defaults'
+        run: |
+          rm -rf /tmp/hostile
+          uv run copier copy --defaults --trust --vcs-ref=HEAD \
+            --data 'project_description=A CLI for "things", 50% off \ backslash' \
+            --data 'author_name=Ada "Ace" Lovelace-OBrien' \
+            "$PWD" /tmp/hostile
+          test -d /tmp/hostile || {
+            echo "::error::copier rolled the destination back on awkward answers"
+            exit 1
+          }
+          python3 -c 'import tomllib; tomllib.load(open("/tmp/hostile/pyproject.toml","rb")); print("pyproject.toml parses")'
+          grep -qF 'A CLI for "things", 50% off \ backslash' /tmp/hostile/README.md || {
+            echo "::error::the description did not survive into README.md"; exit 1; }
+          echo "Awkward answers generate a project that parses."
+
+      # pre-commit operates on `git ls-files`, so without an index every hook
+      # reports "no files to check" and this job passes vacuously. No git init
+      # here; the generation task owns that, so `git add -A` fails if it stops
+      # running.
+      - name: Stage the generated repo
+        run: |
+          cd /tmp/generated
+          git config --global --add safe.directory /tmp/generated
+          git add -A
+
+      - name: Install the generated project
+        working-directory: /tmp/generated
+        run: uv sync --all-groups
+
+      - name: Run the generated project's tests
+        working-directory: /tmp/generated
+        run: uv run pytest -v
+
+      - name: Run the generated project's own quality gate
+        working-directory: /tmp/generated
+        run: uv run pre-commit run --all-files --show-diff-on-failure
+
+      # Last because it is the slowest step, and a broken template should fail
+      # before an image pull. This is the only thing anywhere that builds the
+      # shipped container or parses compose.yaml as compose instead of as
+      # YAML; no gate in either tree lints a Dockerfile at all. Skipped on
+      # no-release, whose image is byte-identical to the defaults one.
+      - name: Build the generated dev container image
+        if: matrix.label != 'no-release'
+        working-directory: /tmp/generated
+        run: docker compose -f .devcontainer/compose.yaml build

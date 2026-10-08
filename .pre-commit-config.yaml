@@ -37,8 +37,11 @@ repos:
   - repo: https://github.com/igorshubovych/markdownlint-cli
     rev: v0.49.1
     hooks:
+      # CHANGELOG.md is excluded too: semantic-release formats it with
+      # blank-line spacing that trips MD012, and its [skip ci] commit would
+      # otherwise surface the failure on a later push.
       - id: markdownlint-fix
-        exclude: ^template/
+        exclude: ^(template/|CHANGELOG\.md$)
 
   - repo: https://github.com/astral-sh/uv-pre-commit
     rev: 0.12.21
