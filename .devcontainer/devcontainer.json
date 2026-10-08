@@ -5,7 +5,7 @@
   "workspaceFolder": "/workspace",
   "customizations": {
     "vscode": {
-      "extensions": ["redhat.vscode-yaml"]
+      "extensions": ["redhat.vscode-yaml", "samuelcolvin.jinjahtml"]
     }
   },
   "remoteUser": "developer"

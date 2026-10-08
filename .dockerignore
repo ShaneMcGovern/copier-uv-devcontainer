@@ -1,5 +1,7 @@
 .git
 .venv
+# The image needs nothing from template/, and it is large.
+template
 **/.mypy_cache
 **/.pytest_cache
 **/.ruff_cache

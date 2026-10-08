@@ -1,0 +1,46 @@
+# These are cherry-picked from github/gitignore's Python.gitignore, not vendored
+# whole. Upstream carries 96 rules for frameworks this template cannot produce,
+# and lacks both .DS_Store and Thumbs.db.
+
+__pycache__/
+*.py[codz]
+*$py.class
+*.so
+
+# Nothing here builds a wheel, but pyproject.toml documents how to add a build
+# backend, and the day someone does these should already be ignored.
+build/
+dist/
+sdist/
+wheels/
+*.egg-info/
+.eggs/
+*.egg
+MANIFEST
+
+.venv/
+venv/
+.env
+.envrc
+
+# badges/coverage.svg stays committed; coverage.xml is only its input.
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.cache
+.hypothesis/
+
+.mypy_cache/
+.dmypy.json
+.ruff_cache/
+.pyre/
+.pytype/
+
+.ipynb_checkpoints/
+
+*.log
+
+.DS_Store
+Thumbs.db

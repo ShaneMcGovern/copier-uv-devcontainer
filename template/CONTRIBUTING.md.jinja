@@ -1,0 +1,289 @@
+# Contributing
+
+## Setup
+
+[README.md](README.md) has the prerequisites, the git identity `.devcontainer/.env`
+supplies, and both ways to start the container. Do that first; everything below
+assumes you are inside it.
+
+### Why everything runs in the container
+
+The container is the only environment whose Python and uv versions are pinned
+and reproducible. Running tools against a host Python will eventually disagree
+with CI. Every command in this document assumes you are inside the container.
+
+This applies to `git commit` as well. The installed hooks call `uv run`, so
+committing from a host shell fails on the host Python. Commit from a container
+shell; the VS Code terminal already is one.
+
+## Making a change
+
+```text
+edit -> git commit -> hooks run -> push -> CI{% if use_semantic_release %} -> merge to main -> release{% endif %}
+```
+
+1. Branch from `main`:
+
+   ```bash
+   git checkout -b feature/short-description
+   ```
+
+2. Make the change, with tests.
+
+3. Run the gate:
+
+   ```bash
+   uv run pre-commit run --all-files
+   uv run pytest
+   ```
+
+4. Commit. The hooks run automatically, and the commit-msg hook rejects any
+   message that is not a Conventional Commit.
+
+5. Push and open a PR against `main`.
+
+Everyday commands:
+
+```bash
+# Tests, with coverage
+uv run pytest
+
+# Lint, fixing what can be fixed
+uv run ruff check --fix .
+
+# Format
+uv run ruff format .
+
+# Type check
+uv run mypy
+
+# Every hook, exactly as CI runs them
+uv run pre-commit run --all-files
+```
+
+`pre-commit run --all-files` covers CI's `pre-commit` job but not its `test`
+job, because pytest is not a hook. Run both before pushing. `uv run` syncs the
+environment before running, so there's no virtualenv to activate.
+
+## Quality gate
+
+`.pre-commit-config.yaml` is the single definition of "correct", used by your
+local hooks and by CI.
+
+One stage is local-only, and deliberately so. CI runs
+`pre-commit run --all-files`, which runs the `pre-commit` stage; the
+`commit-msg` stage needs a commit message to check and there is no such thing in
+a `--all-files` run. So `conventional-pre-commit` guards your commits, not the
+branch, and a message written with `--no-verify`, or on the web, reaches `main`
+unchecked.
+
+| Hook | Stage | What it does |
+| --- | --- | --- |
+| Hygiene hooks | pre-commit | Whitespace, EOF, merge markers, large files, private keys, LF endings |
+| `check-yaml`, `check-json`, `check-toml` | pre-commit | Parse validity |
+| `prettier` | pre-commit | Formats YAML and JSON |
+| `markdownlint-fix` | pre-commit | Formats and lints Markdown |
+| `shellcheck` | pre-commit | Lints shell scripts |
+| `ruff-check`, `ruff-format` | pre-commit | Lints and formats Python |
+| `mypy` | pre-commit | Type checks `src/` and `tests/` |
+| `uv-lock` | pre-commit | Fails if `uv.lock` has drifted |
+| `conventional-pre-commit` | commit-msg | Rejects non-Conventional commit messages |
+
+Several of these are deliberately configured against the obvious default:
+
+- **`ruff` and `mypy` run as local hooks** (`uv run ruff`, `uv run mypy`) rather
+  than through mirror repositories. For mypy this is necessary: a mirrored hook
+  runs in an isolated environment that cannot see project dependencies, so it
+  reports false import errors as soon as there are any. For ruff it means there
+  is one version, declared in `pyproject.toml` and locked in `uv.lock`, so
+  `uv run ruff` and the CI hook cannot drift apart and enforce different rules.
+- **`prettier` is not given TOML.** It can't parse TOML without a plugin.
+- **`check-json` and `prettier` both skip `devcontainer.json`.** It's JSONC:
+  the comments in it are valid there and are a parse error to both tools.
+{% if use_semantic_release -%}
+- **`markdownlint` skips `CHANGELOG.md`.** python-semantic-release generates it
+  and emits two blank lines between releases, which trips MD012. Since the
+  release commit carries `[skip ci]`, that would land unchecked and fail the
+  *next* push, leaving CI red after every release.
+{% endif %}
+## Commit messages
+
+[Conventional Commits](https://www.conventionalcommits.org/), enforced by the
+`conventional-pre-commit` hook.
+{%- if use_semantic_release %} The format feeds the release pipeline:
+python-semantic-release derives the next version from it, and a message it
+can't parse silently produces no release.
+{%- else %} Kept even without automated releases, so the history stays
+machine-readable if you add them later.
+{%- endif %}
+
+```text
+<type>: <description>
+```
+
+{% if use_semantic_release -%}
+| Type | Meaning | Releases? |
+| --- | --- | --- |
+| `feat` | New functionality | Minor |
+| `fix` | Bug fix | Patch |
+| `perf` | Performance improvement | **Patch** |
+| `docs` | Documentation only | No |
+| `refactor` | Restructuring without behaviour change | No |
+| `test` | Tests only | No |
+| `build` | Build system, dependencies, container | No |
+| `ci` | CI configuration | No |
+| `chore` | Everything else | No |
+| `style` | Formatting only | No |
+
+Breaking changes take a `!` after the type (`feat!: ...`) or a
+`BREAKING CHANGE:` footer, and produce a major bump.
+
+`perf` is the one to watch: it reads like housekeeping but ships a patch
+release, because PSR's conventional parser sets `patch_tags = ("fix", "perf")`.
+The commit-msg hook accepts `revert`, but it is not one of PSR's allowed tags,
+so it produces no release.
+{% else -%}
+| Type | Meaning |
+| --- | --- |
+| `feat` | New functionality |
+| `fix` | Bug fix |
+| `perf` | Performance improvement |
+| `docs` | Documentation only |
+| `refactor` | Restructuring without behaviour change |
+| `test` | Tests only |
+| `build` | Build system, dependencies, container |
+| `ci` | CI configuration |
+| `chore` | Everything else |
+| `style` | Formatting only |
+
+Breaking changes take a `!` after the type (`feat!: ...`) or a
+`BREAKING CHANGE:` footer.
+
+No type triggers anything automatically, because this project has no release
+pipeline. The vocabulary is kept so the history stays machine-readable if you
+add one.
+{% endif %}
+Examples:
+
+```text
+feat: add --json output flag
+fix: handle empty input without raising
+docs: document the release pipeline
+```
+
+## Pull requests
+
+PRs are squash-merged, so **the PR title becomes the commit message on `main`**.
+That title must be a valid Conventional Commit. The commit-msg hook can't check
+a PR title, so this one is on you.
+
+`validate.yml` runs on the branch push and again on the PR. It also runs on
+`main` after the merge, because a squashed commit is a commit no CI run has
+seen before.
+
+## Dependencies
+
+```bash
+uv add httpx                      # runtime
+uv add --group dev pytest-mock    # development only
+uv remove httpx
+```
+
+Always commit `uv.lock`. CI installs with `--frozen` and fails if the lock has
+drifted; the `uv-lock` hook catches it locally first.
+
+### Updating pinned tools
+
+Separate mechanisms, because no single one covers everything:
+
+| What | How |
+| --- | --- |
+| Python dependencies | Dependabot, weekly (`uv` ecosystem) |
+| GitHub Actions | Dependabot, weekly (`github-actions` ecosystem) |
+| Base and uv images | Dependabot, weekly (`docker` ecosystem, `/.devcontainer`) |
+| pre-commit hooks | Manual: `uv run pre-commit autoupdate` |
+{% if use_semantic_release -%}
+| python-semantic-release | Manual: the version in `.github/workflows/release.yml` |
+{% endif %}
+Dependabot has no pre-commit ecosystem, which is why the pre-commit row is
+manual. Run it periodically and follow with `uv run pre-commit run --all-files`,
+since a new hook revision often surfaces new findings.
+{% if use_semantic_release %}
+The last row is manual for a different reason. `release.yml` invokes PSR through
+`uvx` with an explicit version rather than using its GitHub Action, so no
+Dependabot ecosystem can see it.
+{% endif %}
+ruff and mypy are **not** pinned by hand. They're declared in
+`pyproject.toml`, locked in `uv.lock`, and called by local hooks, so
+Dependabot's `uv` ecosystem updates them and there is only ever one version of
+each.
+
+## Tests
+
+pytest, with coverage measured against `src/`.
+
+```bash
+uv run pytest                         # everything, with coverage
+uv run pytest tests/test_smoke.py -v  # one file
+uv run pytest -k greeting             # by name
+```
+
+`tests/test_smoke.py` is a placeholder: one test, calling `main()` and checking
+what it printed. It exists so that a fresh project starts green with coverage
+already wired up, not because a line of `print` needs three angles on it.
+Replace it as soon as there is real code to test.
+
+Coverage has no `omit` rules and exactly one exclusion, `[tool.coverage.report]`
+in `pyproject.toml`: the `__main__` guard, which never runs under pytest. If you
+find yourself adding a second, check first whether the code it hides is actually
+needed.
+
+### The coverage badge
+
+`badges/coverage.svg` is committed, and the `badge` job in `validate.yml`
+regenerates it on `main` from the `coverage.xml` that the `test` job uploads.
+
+That chain (a job, the `genbadge` dev dependency, a committed SVG, a README
+badge, a `contents: write` grant and the `main-writes` concurrency group) is
+the largest single thing this project carries for its size, and it is
+deliberate rather than inherited furniture. A coverage badge is standard
+equipment for a Python repository, and retrofitting one later means
+rediscovering all of it.
+
+To drop it: delete the `badge` job and the coverage upload step from
+`validate.yml`, `genbadge` from the dev dependency group, and the `badges/`
+directory, then remove from `README.md` both the badge line at the top and
+the places that describe the `badge` job and `badges/`.
+
+## Types
+
+mypy runs in `strict` mode over `src/` and `tests/`, including test functions.
+New code needs annotations:
+
+```python
+def render(rows: list[str], *, indent: int = 0) -> str: ...
+```
+
+```bash
+uv run mypy
+```
+
+{% if use_semantic_release -%}
+## Releasing
+
+There's nothing to do. Merging a `feat:`, `fix:`, or `perf:` commit to `main`
+triggers `release.yml`, and [README.md](README.md) describes what that pipeline
+does.
+
+Never edit `CHANGELOG.md` by hand or bump a version manually.
+python-semantic-release owns both, and a manual edit will either be overwritten
+or leave the two version locations out of step.
+{%- else -%}
+## Releasing
+
+This project has no automated release pipeline, because `use_semantic_release`
+was answered `false` when it was generated. Tag and write release notes by hand.
+
+Conventional Commits are still enforced by the `conventional-pre-commit` hook,
+so the history stays machine-readable if you add automation later.
+{%- endif %}

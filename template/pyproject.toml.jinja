@@ -1,0 +1,127 @@
+[project]
+name = "{{ project_slug }}"
+# 0.0.0 rather than 0.1.0, so an automated first release (which starts at
+# 0.0.1) does not move the version backwards.
+version = "0.0.0"
+{# A Jinja comment, so this authoring note never reaches a generated project,
+   where the replace pair it describes has already been rendered away.
+
+   Every free-text answer runs through that pair to stay safe inside a TOML
+   basic string. Backslash first, then quote; the other order re-escapes what
+   the first pass produced. Without it a description like `A CLI for "things"`
+   renders as unparseable TOML, `uv lock` fails, and copier rolls the whole
+   destination back. `tojson` is no substitute; it escapes non-ASCII to
+   \uXXXX and would mangle an accented name. -#}
+description = "{{ project_description | replace('\\', '\\\\') | replace('"', '\\"') }}"
+readme = "README.md"
+license = "{{ license }}"
+license-files = ["LICENSE"]
+authors = [{ name = "{{ author_name | replace('\\', '\\\\') | replace('"', '\\"') }}", email = "{{ author_email | replace('\\', '\\\\') | replace('"', '\\"') }}" }]
+{# Derived from python_version so this and .python-version cannot disagree. As
+   independent answers they could, and a mismatch makes a project that
+   `uv lock` refuses. -#}
+# Widen this floor by hand if the project should support older interpreters
+# than the one in .python-version.
+requires-python = ">={{ python_version.split('.')[:2] | join('.') }}"
+dependencies = []
+
+# Nothing reads this while package = false. It is here so the manifest names
+# the repository rather than leaving that to prose alone.
+[project.urls]
+Repository = "https://github.com/{{ github_owner | replace('\\', '\\\\') | replace('"', '\\"') }}/{{ github_repo | replace('\\', '\\\\') | replace('"', '\\"') }}"
+
+# An application, not a distributable, so there is no [build-system] and no
+# [project.scripts]. So uv never installs the project, leaving src/ off
+# sys.path until something puts it back: `pythonpath` below for tests, and
+# PYTHONPATH in compose.yaml for everything else.
+[tool.uv]
+package = false
+
+[dependency-groups]
+dev = [
+    "genbadge[coverage]>=1.1.3",
+    "mypy>=2.3.1",
+    "pre-commit>=4.6.2",
+    "ruff>=0.16.4",
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Remove this and every test fails at collection with ModuleNotFoundError.
+pythonpath = ["src"]
+addopts = "--cov --cov-report=xml --cov-report=term"
+
+[tool.coverage.run]
+source = ["src"]
+branch = true
+
+[tool.coverage.report]
+exclude_also = ['if __name__ == "__main__":']
+
+[tool.ruff]
+line-length = 88
+# target-version stays unset so ruff infers it from requires-python, which
+# keeps the two from drifting apart.
+
+[tool.ruff.lint]
+# flake8-executable (EXE) is left out. Its rules key off the filesystem
+# executable bit, and a Windows/WSL2 bind mount reports 0755 where git tracks
+# 0644, so EXE002 fails in the container and passes in CI, on files that are
+# not scripts at all.
+select = [
+    "E",
+    "W",
+    "F",
+    "I",
+    "B",
+    "C4",
+    "UP",
+    "N",
+    "SIM",
+    "PTH",
+    "ARG",
+    "TID",
+    "RUF",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests often accept fixtures they never reference directly.
+"tests/*" = ["ARG"]
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.mypy]
+files = ["src", "tests"]
+strict = true
+warn_unreachable = true
+# python_version stays unset so mypy infers it from the interpreter it runs
+# under, and uv guarantees that matches .python-version.
+
+{%- if use_semantic_release %}
+
+[tool.semantic_release]
+# No version_variables entry, since an __version__ would be a second copy of
+# the version, with no importlib.metadata to check it against.
+version_toml = ["pyproject.toml:project.version"]
+# This isn't a build. It re-locks so uv.lock records the version
+# python-semantic-release (PSR) just wrote, and `assets` puts the result in the
+# release commit; without that the uv-lock hook fails on the next push. To
+# publish to PyPI, restore [build-system] and make this "uv lock && uv build".
+build_command = "uv lock"
+assets = ["uv.lock"]
+commit_parser = "conventional"
+# Set this false and PSR's first release jumps to 1.0.0.
+allow_zero_version = true
+commit_message = "chore(release): {version} [skip ci]"
+tag_format = "v{version}"
+
+[tool.semantic_release.branches.main]
+match = "main"
+
+[tool.semantic_release.changelog]
+mode = "update"
+insertion_flag = "<!-- version list -->"
+{%- endif %}

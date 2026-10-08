@@ -1,0 +1,12 @@
+# The image copies only entrypoint.sh; everything else arrives through the bind
+# mount. The cache patterns need **/ because those directories appear beside
+# the code, not at the repo root.
+.git
+.venv
+.github
+**/.mypy_cache
+**/.pytest_cache
+**/.ruff_cache
+**/__pycache__
+dist
+**/.env
