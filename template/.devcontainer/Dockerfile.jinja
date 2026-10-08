@@ -2,7 +2,7 @@
 
 # A named build stage keeps the uv version in a literal FROM tag. Dependabot's
 # docker ecosystem tracks those, but not an inline `COPY --from=...:X`.
-FROM ghcr.io/astral-sh/uv:0.12.21 AS uv
+FROM ghcr.io/astral-sh/uv:0.12.23 AS uv
 
 FROM python:{{ python_version }}-slim-bookworm
 

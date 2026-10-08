@@ -47,7 +47,7 @@ repos:
   # Fails when uv.lock has drifted from pyproject.toml. CI installs with
   # `uv sync --frozen`, which never checks, so nothing else catches it.
   - repo: https://github.com/astral-sh/uv-pre-commit
-    rev: 0.12.21
+    rev: 0.12.23
     hooks:
       - id: uv-lock
 
