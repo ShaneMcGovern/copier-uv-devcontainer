@@ -2,7 +2,7 @@
 # so tool.uv.package is false. The version exists for release tagging.
 [project]
 name = "uv-devcontainer"
-version = "0.0.0"
+version = "0.1.0"
 description = "Copier template for uv-based Python projects developed in a dev container."
 requires-python = ">=3.14"
 
