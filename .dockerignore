@@ -1,7 +1,9 @@
 .git
 .venv
-# The image needs nothing from template/, and it is large.
+# The image needs none of these; they only bloat the build context.
 template
+docs
+.github
 **/.mypy_cache
 **/.pytest_cache
 **/.ruff_cache

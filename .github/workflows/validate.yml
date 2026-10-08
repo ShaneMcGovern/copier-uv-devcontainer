@@ -1,0 +1,102 @@
+---
+name: Validate
+
+# This has no path filter and is cheap. template.yml is path-scoped, so a
+# commit that touches only root files would otherwise get no CI run at all.
+on:
+  push:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  pre-commit:
+    name: Root pre-commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+
+      # Nothing manages the action pins under template/, so this checks they
+      # agree with the root's, and Dependabot's own PR reddens until template/
+      # follows. It lives here, not in template.yml, because the change that
+      # breaks it is a root one, which template.yml's path filter misses.
+      # Actions only template/ uses stay manual.
+      - name: Template action pins match the root's
+        run: |
+          pins() { grep -rho 'uses: [^ ]*' "$1" | sed 's/uses: //' | sort -u; }
+          root=$(pins .github/workflows)
+          status=0
+          shared=0
+          while IFS= read -r pin; do
+            action=${pin%@*}
+            # More than one ref means the root's own workflows disagree, which
+            # needs its own message instead of a confused comparison.
+            refs=$(echo "$root" | sed -n "s|^${action}@||p" | sort -u)
+            [ -n "$refs" ] || continue
+            shared=$((shared + 1))
+            if [ "$(echo "$refs" | wc -l)" -gt 1 ]; then
+              echo "::error::${action} has more than one pin at the root: $(echo "$refs" | tr '\n' ' ')"
+              status=1
+            elif [ "${pin#*@}" != "$refs" ]; then
+              echo "::error::${action} is ${pin#*@} under template/ but $refs at the root"
+              status=1
+            fi
+          done <<< "$(pins template/.github/workflows)"
+          if [ "$status" -eq 0 ]; then
+            echo "All $shared shared action pins agree with the root."
+          fi
+          exit "$status"
+
+      # uv is pinned in four places. Dependabot tracks only the root Dockerfile,
+      # since it has no pre-commit ecosystem and cannot parse Dockerfile.jinja.
+      # Without this check a bump lands in one place and the hook runs a
+      # different uv than the container. The grep is anchored on FROM so a
+      # comment naming the image cannot be miscounted as a fifth pin.
+      - name: uv is pinned to one version everywhere
+        run: |
+          files=".devcontainer/Dockerfile .pre-commit-config.yaml"
+          files="$files template/.devcontainer/Dockerfile.jinja"
+          files="$files template/.pre-commit-config.yaml"
+          # shellcheck disable=SC2086
+          found=$(
+            grep -ho '^FROM ghcr.io/astral-sh/uv:[^ ]*' $files | sed 's|.*uv:||'
+            awk '/^  - repo: https:\/\/github\.com\/astral-sh\/uv-pre-commit$/{f=1} f && /rev:/{print $2; f=0}' $files
+          )
+          count=$(echo "$found" | grep -c .)
+          uniq=$(echo "$found" | sort -u)
+          if [ "$(echo "$uniq" | grep -c .)" -ne 1 ]; then
+            echo "::error::uv is pinned to more than one version: $(echo "$uniq" | tr '\n' ' ')"
+            exit 1
+          fi
+          if [ "$count" -ne 4 ]; then
+            echo "::error::expected 4 uv pins, found $count - a pin moved or was renamed"
+            exit 1
+          fi
+          echo "uv is $uniq in all $count places."
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Cache pre-commit hook environments
+        uses: actions/cache@v6.1.0
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
+          # Without this, editing any hook revision is a cold miss and every
+          # environment rebuilds. The stale cache is still mostly valid.
+          restore-keys: |
+            pre-commit-
+
+      - name: Install tooling
+        run: uv sync --frozen --all-groups
+
+      - name: Run the root hooks
+        run: uv run pre-commit run --all-files --show-diff-on-failure

@@ -15,3 +15,29 @@ dev = [
     "pre-commit>=4.6.2",
     "python-semantic-release>=10.6.2",
 ]
+
+[tool.semantic_release]
+# No version_variables entry: the version strings under template/ are
+# placeholders for generated projects and must not be rewritten here.
+version_toml = ["pyproject.toml:project.version"]
+# Not a build. Re-locking keeps uv.lock's recorded version in step with the
+# bump, and assets carries the new lock into the release commit so the uv-lock
+# hook stays satisfied.
+build_command = "uv lock"
+assets = ["uv.lock"]
+commit_parser = "conventional"
+allow_zero_version = true
+# With major_on_zero off, a BREAKING CHANGE footer on a 0.x release costs a
+# minor bump rather than going to 1.0.0, which keeps the footer usable for
+# flagging changes that need manual work. See docs/UPGRADING.md. Governs 0.x
+# only; revisit at 1.0.0.
+major_on_zero = false
+commit_message = "chore(release): {version} [skip ci]"
+tag_format = "v{version}"
+
+[tool.semantic_release.branches.main]
+match = "main"
+
+[tool.semantic_release.changelog]
+mode = "update"
+insertion_flag = "<!-- version list -->"

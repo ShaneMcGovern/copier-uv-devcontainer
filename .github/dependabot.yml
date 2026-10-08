@@ -1,0 +1,36 @@
+---
+version: 2
+
+# The commit-message block is repeated per ecosystem instead of shared through
+# a YAML anchor, because an anchor needs a top-level key and dependabot.yml's
+# schema validation rejects unknown ones. "chore" keeps a bump from cutting a
+# release.
+
+updates:
+  # Monthly, not weekly, because the uv image here is one of four pins that
+  # validate.yml requires to agree, and Dependabot can only move this one. Every
+  # bump therefore reddens until the other three are carried by hand, and uv
+  # releases often enough for that to be weekly work.
+  - package-ecosystem: "docker"
+    directory: "/.devcontainer"
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore"
+      include: "scope"
