@@ -1,0 +1,134 @@
+---
+name: Validate
+
+on:
+  push:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  pre-commit:
+    name: Pre-commit (all hooks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Cache pre-commit hook environments
+        uses: actions/cache@v6.1.0
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
+          # Without this, editing any hook revision is a cold miss and every
+          # environment rebuilds. The stale cache is still mostly valid.
+          restore-keys: |
+            pre-commit-
+
+      # The local ruff and mypy hooks shell out to `uv run`, so the project
+      # environment has to exist first.
+      - name: Install dependencies
+        run: uv sync --frozen --all-groups
+
+      - name: Run all pre-commit hooks
+        run: uv run pre-commit run --all-files --show-diff-on-failure
+
+  test:
+    name: Run tests
+    needs: pre-commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+
+      # python-version is left unset because uv reads .python-version, so the
+      # interpreter pin lives in exactly one place.
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install dependencies
+        run: uv sync --frozen --all-groups
+
+      - name: Run tests
+        run: uv run pytest -v
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: coverage
+          path: coverage.xml
+          if-no-files-found: error
+
+  # This is a separate job, not a step in `test`, because `test` runs the
+  # project's own test code and this job holds contents: write on main. Merging
+  # them would hand that grant to whatever the tests execute. CONTRIBUTING.md
+  # says why the badge chain is here and what to delete to drop it.
+  badge:
+    name: Update coverage badge
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    permissions:
+      contents: write
+
+    # This group is shared with the release workflow, where there is one, so
+    # the two cannot race each other pushing to main.
+    concurrency:
+      group: main-writes
+      cancel-in-progress: false
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      # Reuse what the test job measured instead of re-running the suite.
+      - name: Download coverage report
+        uses: actions/download-artifact@v8.0.1
+        with:
+          name: coverage
+
+      - name: Install dependencies
+        run: uv sync --frozen --all-groups
+
+      # genbadge writes no trailing newline, and this job commits directly with
+      # no hooks installed, so without the printf end-of-file-fixer fails for
+      # everyone else.
+      - name: Regenerate the coverage badge
+        run: |
+          uv run genbadge coverage -i coverage.xml -o badges/coverage.svg
+          printf '\n' >> badges/coverage.svg
+
+      - name: Commit the badge if it changed
+        run: |
+          if git diff --quiet -- badges/coverage.svg; then
+            echo "Coverage badge unchanged; nothing to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add badges/coverage.svg
+          git commit -m "chore: update coverage badge [skip ci]"
+          git pull --rebase origin main
+          git push origin HEAD:main

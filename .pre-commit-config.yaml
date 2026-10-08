@@ -6,24 +6,39 @@ repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
+      # Hooks skip template/: its files are Jinja and are not valid YAML,
+      # shell, or JSON until Copier renders them.
       - id: trailing-whitespace
+        exclude: ^template/
       - id: end-of-file-fixer
+        exclude: ^template/
       - id: check-yaml
+        name: check yaml
+        exclude: ^(template/|copier\.yml$)
+      # copier.yml uses a !include tag that PyYAML's safe loader cannot build,
+      # so check its syntax only.
+      - id: check-yaml
+        name: check yaml (copier.yml, syntax only)
+        args: [--unsafe]
+        files: ^copier\.yml$
       - id: check-merge-conflict
       - id: check-added-large-files
       - id: detect-private-key
       - id: mixed-line-ending
         args: [--fix=lf]
+        exclude: ^template/
 
   - repo: https://github.com/shellcheck-py/shellcheck-py
     rev: v0.11.0.1
     hooks:
       - id: shellcheck
+        exclude: ^template/
 
   - repo: https://github.com/igorshubovych/markdownlint-cli
     rev: v0.49.1
     hooks:
       - id: markdownlint-fix
+        exclude: ^template/
 
   - repo: https://github.com/astral-sh/uv-pre-commit
     rev: 0.12.21

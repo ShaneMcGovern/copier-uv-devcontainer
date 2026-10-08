@@ -1,0 +1,72 @@
+---
+# Without a name the project falls back to the compose file's parent directory,
+# literally "devcontainer", and every project generated from this template
+# would share one set of named volumes. The filters are there because compose
+# normalizes a name instead of rejecting it, so `Zope.Interface` and
+# `ZopeInterface` would both become `zopeinterface` and collide. PEP 508
+# permits both forms, so the project_slug validator cannot rule them out.
+name: {{ project_slug | lower | replace('.', '-') }}
+
+services:
+  app:
+    # The context is the repo root so the build can see pyproject.toml and the
+    # sources; the Dockerfile lives under .devcontainer/ to keep these files
+    # together.
+    build:
+      context: ..
+      dockerfile: .devcontainer/Dockerfile
+      args:
+        USER_UID: ${USER_UID:-1000}
+        USER_GID: ${USER_GID:-1000}
+
+    volumes:
+      - ..:/app
+
+      # Named volumes, so they survive `docker compose down` and a rebuild. The
+      # venv is a volume, not part of the bind mount, so binaries built in the
+      # container never collide with host file permissions. pre-commit's cache
+      # is the expensive one. Without it, every new container rebuilds each
+      # hook's isolated environment from scratch.
+      - venv:/app/.venv
+      - uv-cache:/home/developer/.cache/uv
+      - precommit-cache:/home/developer/.cache/pre-commit
+      - gh-config:/home/developer/.config/gh
+
+    working_dir: /app
+    init: true
+
+    # Use the list form. A bare name passes the variable through only when it
+    # is set. The map form's `${VAR:-}` injects an empty string, and git reads
+    # GIT_AUTHOR_NAME/EMAIL directly, outranking user.name, so an empty value
+    # fails every commit with "fatal: empty ident name". entrypoint.sh cannot
+    # unset it either, because VS Code terminals and `docker exec` bypass the
+    # entrypoint.
+    environment:
+      - GIT_AUTHOR_NAME
+      - GIT_AUTHOR_EMAIL
+      - GH_CONFIG_DIR=/home/developer/.config/gh
+      - UV_CACHE_DIR=/home/developer/.cache/uv
+      - PRE_COMMIT_HOME=/home/developer/.cache/pre-commit
+      # package = false keeps src/ off sys.path, so `python -m main` fails
+      # without this. pytest has its own `pythonpath` setting; nothing else
+      # does. The path is absolute because a relative entry would follow the
+      # caller's directory.
+      - PYTHONPATH=/app/src
+
+    healthcheck:
+      # Test the interpreter binary, not the directory. The Dockerfile
+      # pre-creates /app/.venv, so a directory test would pass before uv sync
+      # populates it.
+      test: ["CMD", "test", "-x", "/app/.venv/bin/python"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # A cold sync after `down -v` can take more than two minutes, and too
+      # short a grace period flips the container to unhealthy mid-start.
+      start_period: 180s
+
+volumes:
+  venv:
+  uv-cache:
+  precommit-cache:
+  gh-config:

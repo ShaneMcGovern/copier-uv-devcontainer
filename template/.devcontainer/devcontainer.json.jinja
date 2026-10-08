@@ -1,0 +1,41 @@
+{
+  // This file holds only the VS Code pieces. Everything that makes the
+  // environment usable lives in entrypoint.sh, so `docker compose up` alone is
+  // enough.
+  "name": "{{ project_slug }}",
+
+  "dockerComposeFile": "compose.yaml",
+  "service": "app",
+  "workspaceFolder": "/app",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "charliermarsh.ruff",
+        "ms-python.mypy-type-checker",
+        "ms-python.python"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/app/.venv/bin/python",
+        // Without this the extension uses its own bundled mypy, which cannot
+        // see .venv, and reports every third-party import as missing.
+        "mypy-type-checker.importStrategy": "fromEnvironment",
+        "python.testing.pytestEnabled": true,
+        // coverage.py and the debugger both work by tracing, and addopts
+        // carries --cov, so breakpoints in tests are silently skipped. This
+        // applies to editor runs only; CI and `uv run pytest` still measure
+        // coverage.
+        "python.testing.pytestArgs": ["--no-cov"],
+        "editor.formatOnSave": true,
+        "[python]": {
+          "editor.defaultFormatter": "charliermarsh.ruff",
+          "editor.codeActionsOnSave": {
+            "source.organizeImports.ruff": "explicit"
+          }
+        }
+      }
+    }
+  },
+
+  "remoteUser": "developer"
+}

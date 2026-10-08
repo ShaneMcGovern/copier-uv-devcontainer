@@ -1,0 +1,134 @@
+---
+_subdirectory: template
+
+# _exclude replaces copier's built-in list, so the defaults worth keeping are
+# repeated here. Copier copies a local template's dirty working tree, so a
+# stray __pycache__ would otherwise land in the project. copier.yml and .git
+# are left off because _subdirectory makes every path relative to template/,
+# where neither can match.
+_exclude:
+  - "~*"
+  - "*.py[co]"
+  - "__pycache__"
+  - ".DS_Store"
+  - "{% if not use_semantic_release %}.github/workflows/release.yml{% endif %}"
+  - "{% if not use_semantic_release %}CHANGELOG.md{% endif %}"
+
+# An older copier hits the `!include` in python-versions.yml and dies with a
+# raw PyYAML traceback that never mentions copier. This sets a floor, not a pin.
+_min_copier_version: "9.17.2"
+
+# .devcontainer/.env is rendered, not copied from .env.example, because compose
+# passes GIT_AUTHOR_NAME and GIT_AUTHOR_EMAIL through it, and an empty value
+# fails *every* commit with "fatal: empty ident name". entrypoint.sh can't do
+# it; compose reads .env before the container starts. Listed here so it never
+# clobbers a local edit. Copier writes it only when absent, and feeds it to
+# `git apply --exclude` on update.
+_skip_if_exists:
+  - ".devcontainer/.env"
+
+# Each command must be a list, not a string. Copier runs a string through
+# cmd.exe on Windows, which has no `[`, `cp` or `||`, so a string guard would
+# fail there and copier would roll the whole project back. Test this from
+# PowerShell; Git Bash hides it by putting Git's own cp.exe on the PATH.
+#
+# A list has no `||`, and `when:` can't substitute, because
+# _copier_conf.dst_path is a PurePath and a filesystem test on it raises
+# UndefinedError. So every task must be safe to run unconditionally, and
+# anything that is not belongs in _skip_if_exists. `git init` qualifies; it is
+# idempotent on an existing repo.
+_tasks:
+  - command: ["git", "init", "-q", "."]
+
+project_name:
+  type: str
+  help: Human-readable project name
+  default: My Project
+
+project_slug:
+  type: str
+  help: Distribution name, PyPI style
+  default: "{{ project_name|lower|replace(' ', '-')|replace('_', '-') }}"
+  # This lands in pyproject's `name`, which PEP 508 constrains, and it derives
+  # from project_name, so accented letters make an invalid slug with no typo.
+  # Failing at the prompt beats failing inside a task, which rolls the
+  # destination back with a TOML error naming a file nobody wrote.
+  validator: >-
+    {% if not (project_slug | regex_search('^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$')) %}
+    Not a PEP 508 name: use ASCII letters and digits, with . _ - between them
+    {% endif %}
+
+project_description:
+  type: str
+  help: One-line description
+  default: A Python project.
+
+# These placeholders are not a real person's details. They reach pyproject's
+# `authors`, LICENSE, the README and the container's git identity, so a real
+# default would stamp that person on every project made by pressing enter.
+# They are obvious rather than empty because --defaults takes whatever is here,
+# and an empty name fails every commit.
+author_name:
+  type: str
+  help: Name for pyproject authors, LICENSE and the container's git identity
+  default: Your Name
+
+author_email:
+  type: str
+  help: Email for pyproject authors and the container's git identity
+  default: you@example.com
+
+github_owner:
+  type: str
+  # Also the CODEOWNERS owner, so accepting the placeholder makes GitHub report
+  # an unknown owner. We want that loud failure.
+  help: GitHub user or org; joins github_repo in the badge and project URLs
+  default: your-github-username
+
+github_repo:
+  type: str
+  help: GitHub repository name; not assumed to match the distribution name
+  default: "{{ project_slug }}"
+
+# Adding a choice needs a matching branch in template/LICENSE.jinja, which has
+# no else branch. A choice without a branch renders a zero-byte LICENSE, and no
+# hook claims an extensionless file to catch it.
+license:
+  type: str
+  choices:
+    - MIT
+    - Apache-2.0
+    - BSD-3-Clause
+  default: MIT
+
+# A literal that goes stale every January. Deriving the year needs jinja2_time,
+# and _jinja_extensions imports from copier's own environment, so the
+# documented `uvx copier copy gh:...` flow would fail for anyone who lacks that
+# package.
+copyright_year:
+  type: int
+  default: 2026
+
+# `!include` resolves relative to this file. `when: false` keeps the list out
+# of .copier-answers.yml, so a stale copy cannot replay itself on a later
+# `copier update`.
+supported_pythons:
+  type: yaml
+  when: false
+  default: !include python-versions.yml
+
+# `choices` also makes copier refuse an unlisted value. The answer reaches
+# .python-version and the container's FROM tag, which accept only real
+# versions, so a typo would otherwise generate cleanly and fail later. The
+# default is derived because copier requires one and rejects any outside
+# `choices`.
+python_version:
+  type: str
+  help: Exact interpreter, for .python-version and the container image
+  choices: "{{ supported_pythons | tojson }}"
+  default: "{{ supported_pythons[0] }}"
+
+use_semantic_release:
+  type: bool
+  help: Automate releases and the changelog from Conventional Commits?
+  default: true

@@ -1,0 +1,13 @@
+"""Entry point: `python -m main`.
+
+The work is in `main`, not at module scope, so tests can call it without
+running the module.
+"""
+
+
+def main() -> None:
+    print("Hello from {{ project_slug }}!")
+
+
+if __name__ == "__main__":
+    main()

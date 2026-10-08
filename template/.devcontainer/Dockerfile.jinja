@@ -1,0 +1,71 @@
+# syntax=docker/dockerfile:1
+
+# A named build stage keeps the uv version in a literal FROM tag. Dependabot's
+# docker ecosystem tracks those, but not an inline `COPY --from=...:X`.
+FROM ghcr.io/astral-sh/uv:0.12.21 AS uv
+
+FROM python:{{ python_version }}-slim-bookworm
+
+# The base already ships a trust store, and pre-commit's nodeenv fetches Node
+# through Python rather than curl, so neither ca-certificates nor curl is
+# installed here.
+#
+# gh: bookworm freezes it at 2.23.0, enough for auth, repo and pr, and no
+#   Dependabot ecosystem sees an apt package, so the pin never moves. Accepted,
+#   because the alternative is GitHub's own apt repository and a
+#   keyring-and-source-list block.
+# libatomic1: pre-commit's nodeenv Node runtime (for the prettier and
+#   markdownlint hooks) needs it, and the slim base leaves it out.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        gh \
+        git \
+        libatomic1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=uv /uv /uvx /bin/
+
+# UV_LINK_MODE=copy because hard links fail across the bind-mount/volume
+# boundary. VIRTUAL_ENV and PATH put the project environment ahead of the
+# system interpreter, so a plain interactive shell finds pytest, ruff and mypy.
+# VS Code and the hooks go through `uv run`, but a terminal has neither.
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    VIRTUAL_ENV=/app/.venv \
+    PATH=/app/.venv/bin:$PATH
+
+# ENV alone is not enough. A login shell sources /etc/profile, which rebuilds
+# PATH from scratch and drops the venv.
+RUN printf 'export VIRTUAL_ENV=/app/.venv\nexport PATH="/app/.venv/bin:${PATH}"\n' \
+    > /etc/profile.d/10-venv.sh
+
+# The NAME is a literal because compose.yaml hardcodes /home/developer for the
+# cache volumes and GH_CONFIG_DIR. The NUMBERS are args because a bind mount
+# passes UIDs through unchanged, so on a Linux host that is not uid 1000 /app
+# is readable but not writable and pytest fails writing coverage.xml. Docker
+# Desktop maps every file to the container user, so Windows and macOS never
+# need these.
+ARG USER_UID=1000
+ARG USER_GID=1000
+RUN groupadd --gid ${USER_GID} developer \
+    && useradd --uid ${USER_UID} --gid ${USER_GID} --create-home --shell /bin/bash developer
+
+WORKDIR /app
+
+COPY --chown=root:root --chmod=755 .devcontainer/entrypoint.sh /entrypoint.sh
+
+# Every path compose.yaml mounts a named volume onto must exist and belong to
+# the non-root user. Docker creates a missing mount target as root, which
+# breaks `gh auth login`, `uv sync` and pre-commit hook installation.
+RUN mkdir -p /app/.venv \
+        "/home/developer/.cache/uv" \
+        "/home/developer/.cache/pre-commit" \
+        "/home/developer/.config/gh" \
+    && chown -R developer:developer \
+        /app \
+        "/home/developer/.cache" \
+        "/home/developer/.config"
+
+USER developer
+
+ENTRYPOINT ["/bin/bash", "/entrypoint.sh"]

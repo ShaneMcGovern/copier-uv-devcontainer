@@ -1,0 +1,53 @@
+---
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Semantic release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+
+    # validate.yml's badge job uses this group too; both push to main.
+    concurrency:
+      group: main-writes
+      cancel-in-progress: false
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+        with:
+          # python-semantic-release (PSR) reads the whole history and every
+          # tag to work out the next version. A shallow clone breaks it.
+          fetch-depth: 0
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Configure git identity for the release commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      # uvx is used instead of PSR's Docker action, whose image is built with
+      # `pip install --pre` and so resolves pre-release dependencies that
+      # cannot be pinned.
+      - name: Python Semantic Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: uvx --from python-semantic-release==10.6.2 semantic-release -v version
