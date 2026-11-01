@@ -2,7 +2,7 @@
 
 FROM ghcr.io/astral-sh/uv:0.12.23 AS uv
 
-FROM python:3.14.7-slim-bookworm
+FROM python:3.15.0-slim-bookworm
 
 LABEL org.opencontainers.image.title="uv-devcontainer-repo" \
       org.opencontainers.image.description="Dev container for the uv-devcontainer template repository"
